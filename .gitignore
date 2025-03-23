@@ -1,0 +1,68 @@
+# Віртуальне середовище Python
+venv/
+env/
+.env
+
+# Кеш Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Файли логів
+*.log
+
+# Файли бази даних
+*.db
+*.sqlite3
+*.sqlite
+
+# Файли середовища
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Файли IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Файли конфігурації
+config.py
+config.ini
+settings.ini
+
+# Тимчасові файли
+tmp/
+temp/
+
+# Файли сесій
+sessions/
+
+# Файли з токенами та ключами
+*.pem
+*.key
+*.crt
+
+# Файли з даними
+data/
