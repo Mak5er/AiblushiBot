@@ -19,37 +19,36 @@ async def start_cmd(message: types.Message, state: FSMContext):
         return
 
     await message.bot.send_chat_action(message.chat.id, "typing")
-    
+
     user_id = message.from_user.id
     username = message.from_user.username
 
     # Перевіряємо, чи вже є користувач в базі
     user = await get_user_by_id(user_id)
-    
+
     if not user:
         # Створюємо нового користувача
         await add_user(user_id, username)
-        
+
         # Повідомляємо адміністраторів про нового користувача
-        for admin_id in ADMIN_ID:
-            await message.bot.send_chat_action(admin_id, "typing")
-            approve_kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [
-                    types.InlineKeyboardButton(text="✅ Підтвердити", callback_data=f"approve_{user_id}"),
-                    types.InlineKeyboardButton(text="❌ Відхилити", callback_data=f"reject_{user_id}")
-                ]
-            ])
-            
-            await message.bot.send_message(
-                admin_id,
-                f"👤 <b>Новий користувач запитує доступ:</b>\n\n"
-                f"ID: <code>{user_id}</code>\n"
-                f"Username: @{username if username else 'Не вказано'}\n"
-                f"Ім'я: {message.from_user.full_name}",
-                parse_mode="HTML",
-                reply_markup=approve_kb
-            )
-        
+        await message.bot.send_chat_action(ADMIN_ID, "typing")
+        approve_kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [
+                types.InlineKeyboardButton(text="✅ Підтвердити", callback_data=f"approve_{user_id}"),
+                types.InlineKeyboardButton(text="❌ Відхилити", callback_data=f"reject_{user_id}")
+            ]
+        ])
+
+        await message.bot.send_message(
+            admin_id,
+            f"👤 <b>Новий користувач запитує доступ:</b>\n\n"
+            f"ID: <code>{user_id}</code>\n"
+            f"Username: @{username if username else 'Не вказано'}\n"
+            f"Ім'я: {message.from_user.full_name}",
+            parse_mode="HTML",
+            reply_markup=approve_kb
+        )
+
         # Повідомляємо користувача про очікування підтвердження
         await message.answer(
             f"👋 <b>Вітаємо вас, {message.from_user.first_name}!</b>\n\n"
@@ -71,7 +70,7 @@ async def start_cmd(message: types.Message, state: FSMContext):
                 f"Ваш запит на доступ ще розглядається. Будь ласка, зачекайте на підтвердження.",
                 parse_mode="HTML"
             )
-    
+
     # Очищаємо стан FSM
     await state.clear()
 
