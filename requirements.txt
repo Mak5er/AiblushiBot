@@ -1,3 +1,4 @@
 aiogram
 SQLAlchemy
 asyncpg
+python-dotenv
