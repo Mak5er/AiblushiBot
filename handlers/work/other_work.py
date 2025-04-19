@@ -112,6 +112,10 @@ async def process_other_work_description(message: types.Message, state: FSMConte
     selected_partners = data.get("all_partners", [])
     nobody_selected = data.get("nobody_selected", False)
 
+    if description == "🏠 На головну":
+        await state.clear()
+        await message.answer("👋 <b>Головне меню</b>", reply_markup=kb.main_menu_kb, parse_mode="HTML")
+
     # Перевіряємо наявність опису
     if not description:
         await message.bot.send_chat_action(message.chat.id, "typing")

@@ -30,11 +30,11 @@ async def main():
         dp.callback_query.outer_middleware(middleware())
         dp.inline_query.outer_middleware(middleware())
 
-    dp.include_router(user_router)
     dp.include_router(admin_router)
     dp.include_router(work_router)
     dp.include_router(reports_router)
     dp.include_router(dehydrator_router)
+    dp.include_router(user_router)
 
     polling_task = asyncio.create_task(dp.start_polling(bot))
     checking_task = asyncio.create_task(check_drying_sessions(bot))
