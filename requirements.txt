@@ -1,0 +1,3 @@
+aiogram
+SQLAlchemy
+asyncpg
