@@ -115,6 +115,7 @@ async def process_other_work_description(message: types.Message, state: FSMConte
     if description == "🏠 На головну":
         await state.clear()
         await message.answer("👋 <b>Головне меню</b>", reply_markup=kb.main_menu_kb, parse_mode="HTML")
+        return
 
     # Перевіряємо наявність опису
     if not description:
