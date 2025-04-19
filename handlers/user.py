@@ -40,7 +40,7 @@ async def start_cmd(message: types.Message, state: FSMContext):
         ])
 
         await message.bot.send_message(
-            admin_id,
+            ADMIN_ID,
             f"👤 <b>Новий користувач запитує доступ:</b>\n\n"
             f"ID: <code>{user_id}</code>\n"
             f"Username: @{username if username else 'Не вказано'}\n"
