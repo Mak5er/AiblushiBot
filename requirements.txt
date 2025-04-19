@@ -2,3 +2,4 @@ aiogram
 SQLAlchemy
 asyncpg
 python-dotenv
+cachetools
