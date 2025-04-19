@@ -1,0 +1,10 @@
+services:
+  aiblushi-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+    env_file: .env
+    container_name: aiblushi-bot
+    restart: always
