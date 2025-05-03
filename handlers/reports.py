@@ -1,16 +1,17 @@
 import calendar
 import datetime
-from typing import Dict, List, Tuple, Optional, Union
+from typing import Dict, List, Tuple
+from sqlalchemy import select
 
 from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
-from sqlalchemy import select
+from aiogram.types import KeyboardButton
 
 import keyboards as kb
 from services.db import get_available_months, get_all_work_sessions, \
-    get_all_other_works, get_available_months_all_users, get_user_by_id, WorkPartner, OtherWorkPartner, async_session
+    get_all_other_works, get_available_months_all_users, get_user_by_id, \
+    async_session, WorkPartner, OtherWorkPartner
 from utils.helpers import format_time
 
 # Створюємо роутер для звітності
@@ -148,8 +149,6 @@ async def generate_monthly_report(message: types.Message, month: int, year: int)
     start_date, end_date = get_month_range(month, year)
     await message.bot.send_chat_action(message.chat.id, "typing")
 
-
-
     try:
         # Отримуємо дані про всіх користувачів
         await message.answer("🔍 <b>Пошук даних...</b>", parse_mode="HTML")
@@ -157,16 +156,22 @@ async def generate_monthly_report(message: types.Message, month: int, year: int)
         all_work_sessions = await get_all_work_sessions(start_date, end_date)
         all_other_works = await get_all_other_works(start_date, end_date)
 
-
         # Аналізуємо дані та формуємо звіт для всіх користувачів
         await message.answer("⚙️ <b>Аналізую дані...</b>", parse_mode="HTML")
         await message.bot.send_chat_action(message.chat.id, "typing")
         report_data = await analyze_all_work_data(all_work_sessions, all_other_works)
 
-
         # Спочатку надсилаємо загальні підсумки
         month_name = get_month_name(month)
         totals = report_data["totals"]
+
+        # Обчислюємо загальний час для всіх типів робіт
+        total_all_time = (
+            totals['production']['time'] + 
+            totals['packaging']['time'] + 
+            totals['sales']['time'] + 
+            totals['other_work']['time']
+        )
 
         await message.answer("📝 <b>Формую загальний звіт...</b>", parse_mode="HTML")
         report = f"📊 <b>Звіт за {month_name} {year} - Загальні підсумки</b>\n\n"
@@ -174,7 +179,8 @@ async def generate_monthly_report(message: types.Message, month: int, year: int)
         report += f"🏭 <b>Виробництво:</b> {format_time(totals['production']['time'])}\n"
         report += f"📦 <b>Пакування:</b> {format_time(totals['packaging']['time'])}, {totals['packaging']['packages']} пакетів\n"
         report += f"💰 <b>Продаж:</b> {format_time(totals['sales']['time'])}, {totals['sales']['packages']} пакетів, {totals['sales']['amount']} грн\n"
-        report += f"📝 <b>Інша робота:</b> {format_time(totals['other_work']['time'])}\n\n"
+        report += f"📝 <b>Інша робота:</b> {format_time(totals['other_work']['time'])}, {totals['other_work']['works']} робіт\n"
+        report += f"⏱ <b>Загальний час усіх робіт:</b> {format_time(total_all_time)}\n\n"
 
         # Відправляємо загальний звіт
         await message.answer(report, parse_mode="HTML")
@@ -183,12 +189,34 @@ async def generate_monthly_report(message: types.Message, month: int, year: int)
         await message.answer("📊 <b>Формую детальний звіт по користувачах...</b>", parse_mode="HTML")
         users_report = f"📊 <b>Детальний звіт за {month_name} {year} по користувачах</b>\n\n"
 
+        # Формуємо словник для іншої роботи, де ключ - опис роботи, а значення - список імен користувачів
+        other_works_users = {}
+        if "other_works_details" in report_data:
+            for work_detail in report_data["other_works_details"]:
+                description = work_detail["description"]
+                user_id = work_detail["user_id"]
+                work_date = work_detail["date"]
+                
+                user = await get_user_by_id(user_id)
+                user_name = f"@{user.username}" if user and user.username else f"Користувач {user_id}"
+                
+                if description not in other_works_users:
+                    other_works_users[description] = []
+                
+                user_entry = f"{work_date} - {user_name}"
+                # Додаємо тільки унікальні записи
+                if user_entry not in other_works_users[description]:
+                    other_works_users[description].append(user_entry)
+
         for user_id, user_data in report_data["users"].items():
             user = await get_user_by_id(user_id)
-            if not user:
-                continue  # Пропускаємо користувача, якщо не знайдено
-
-            user_name = f"@{user.username}" if user.username else f"Користувач {user_id}"
+            
+            # Визначаємо ім'я користувача - якщо немає username, використовуємо ID
+            if user and user.username:
+                user_name = f"@{user.username}"
+            else:
+                user_name = f"Користувач {user_id}"
+                
             users_report += f"👤 <b>{user_name}</b>\n"
 
             # Додаємо інформацію про виробництво
@@ -226,14 +254,39 @@ async def generate_monthly_report(message: types.Message, month: int, year: int)
             total_time = production_time + packaging_time + sales_time + other_work['time']
             users_report += f"⏱ <b>Загальний час:</b> {format_time(total_time)}\n\n"
 
-        # Відправляємо детальний звіт по користувачах
-        if len(users_report) > 4096:
-            # Розбиваємо звіт на частини, якщо він занадто довгий
-            for i in range(0, len(users_report), 4000):
-                part = users_report[i:i+4000]
-                await message.answer(part, parse_mode="HTML")
-        else:
+        # Додаємо окремий розділ з іншими роботами та учасниками
+        if other_works_users:
             await message.answer(users_report, parse_mode="HTML")
+            
+            other_works_report = f"📋 <b>Список інших робіт за {month_name} {year}:</b>\n\n"
+            
+            # Сортуємо роботи за описом
+            for description in sorted(other_works_users.keys()):
+                users_list = other_works_users[description]
+                other_works_report += f"📝 <b>{description}</b>\n"
+                
+                # Сортуємо користувачів за датою
+                for user_info in sorted(users_list):
+                    other_works_report += f"   • {user_info}\n"
+                other_works_report += "\n"
+                
+            # Відправляємо звіт про інші роботи
+            if len(other_works_report) > 4096:
+                # Розбиваємо звіт на частини, якщо він занадто довгий
+                for i in range(0, len(other_works_report), 4000):
+                    part = other_works_report[i:i+4000]
+                    await message.answer(part, parse_mode="HTML")
+            else:
+                await message.answer(other_works_report, parse_mode="HTML")
+        else:
+            # Відправляємо детальний звіт по користувачах, якщо немає інших робіт
+            if len(users_report) > 4096:
+                # Розбиваємо звіт на частини, якщо він занадто довгий
+                for i in range(0, len(users_report), 4000):
+                    part = users_report[i:i+4000]
+                    await message.answer(part, parse_mode="HTML")
+            else:
+                await message.answer(users_report, parse_mode="HTML")
 
     except Exception as e:
         print(f"Error generating monthly report: {str(e)}")
@@ -266,7 +319,7 @@ def analyze_work_data(work_sessions: List, other_works: List) -> Dict:
 
         work_type = session.work_type
 
-        # Додаємо дані в залежності від типу роботи
+        # Додаємо дані залежно від типу роботи
         if work_type == "production":
             if is_host:
                 report["production"]["host_time"] += duration_minutes
@@ -385,7 +438,7 @@ def get_months_keyboard(available_months: List[Tuple[int, int]]) -> types.ReplyK
     Args:
         available_months: Список кортежів (місяць, рік)
     """
-    # Сортуємо місяці в зворотньому хронологічному порядку
+    # Сортуємо місяці у зворотньому хронологічному порядку
     sorted_months = sorted(available_months, key=lambda x: (x[1], x[0]), reverse=True)
 
     buttons = []
@@ -441,17 +494,56 @@ async def analyze_all_work_data(all_work_sessions: List, all_other_works: List) 
             "sales": {"time": 0, "sessions": 0, "packages": 0, "amount": 0},
             "other_work": {"time": 0, "works": 0}
         },
-        "users": {}
+        "users": {},
+        "other_works_details": []  # Додаємо деталі інших робіт
     }
 
     # Ініціалізуємо словник для зберігання даних користувачів
     unique_users = set()
-    for session in all_work_sessions:
-        unique_users.add(session.user_id)
+    
+    # Додаємо всіх головних користувачів та їх партнерів
+    for ws in all_work_sessions:
+        unique_users.add(ws.user_id)
+        # Додаємо замовника сесії
+        if hasattr(ws, 'requested_by'):
+            unique_users.add(ws.requested_by)
+        # Додаємо партнера, якщо він вказаний напряму
+        if hasattr(ws, 'partner_id') and ws.partner_id:
+            unique_users.add(ws.partner_id)
     
     for work in all_other_works:
         unique_users.add(work.user_id)
+        # Додаємо партнера, якщо він вказаний напряму
+        if hasattr(work, 'partner_id') and work.partner_id:
+            unique_users.add(work.partner_id)
+    
+    # Додаємо всіх партнерів з таблиць WorkPartner і OtherWorkPartner
+    async with async_session() as db_session:
+        # Отримуємо всіх партнерів з WorkPartner для всіх сесій
+        for ws in all_work_sessions:
+            if ws.id:  # Переконуємося, що сесія має ID
+                result = await db_session.execute(
+                    select(WorkPartner.partner_id).where(
+                        WorkPartner.session_id == ws.id
+                    )
+                )
+                partners = result.scalars().all()
+                for partner_id in partners:
+                    unique_users.add(partner_id)
+        
+        # Отримуємо всіх партнерів з OtherWorkPartner
+        for other_work in all_other_works:
+            if other_work.id:  # Переконуємося, що робота має ID
+                result = await db_session.execute(
+                    select(OtherWorkPartner.partner_id).where(
+                        OtherWorkPartner.other_work_id == other_work.id
+                    )
+                )
+                partners = result.scalars().all()
+                for partner_id in partners:
+                    unique_users.add(partner_id)
 
+    # Ініціалізуємо дані для всіх унікальних користувачів
     for user_id in unique_users:
         report["users"][user_id] = {
             "production": {"host_time": 0, "partner_time": 0},
@@ -461,26 +553,26 @@ async def analyze_all_work_data(all_work_sessions: List, all_other_works: List) 
         }
 
     # Обробляємо сесії роботи
-    for session in all_work_sessions:
-        if not session.end_time:
+    for ws in all_work_sessions:
+        if not ws.end_time:
             continue  # Пропускаємо незавершені сесії
 
         # Розраховуємо тривалість у хвилинах
-        duration_minutes = (session.end_time - session.start_time).total_seconds() / 60
+        duration_minutes = (ws.end_time - ws.start_time).total_seconds() / 60
         
         # Визначаємо тип роботи
-        work_type = session.work_type
+        work_type = ws.work_type
         
         # Визначаємо користувача
-        user_id = session.user_id
+        user_id = ws.user_id
         
         # Визначаємо, чи користувач був головним або партнером
         try:
-            is_host = session.user_id == session.requested_by
+            is_host = ws.user_id == ws.requested_by
         except (AttributeError, TypeError):
             is_host = True  # За замовчуванням вважаємо головним
 
-        # Додаємо дані в залежності від типу роботи
+        # Додаємо до загальних підсумків (тільки один раз для кожної сесії)
         if work_type == "production":
             # Додаємо до загальних підсумків
             report["totals"]["production"]["time"] += duration_minutes
@@ -491,12 +583,16 @@ async def analyze_all_work_data(all_work_sessions: List, all_other_works: List) 
                 report["users"][user_id]["production"]["host_time"] += duration_minutes
             else:
                 report["users"][user_id]["production"]["partner_time"] += duration_minutes
+                
+            # Додаємо час для замовника, якщо це інша людина
+            if ws.requested_by != user_id and ws.requested_by in report["users"]:
+                report["users"][ws.requested_by]["production"]["host_time"] += duration_minutes
         
         elif work_type == "packaging":
             # Додаємо до загальних підсумків
             report["totals"]["packaging"]["time"] += duration_minutes
             report["totals"]["packaging"]["sessions"] += 1
-            packages_count = session.packages_count if session.packages_count else 0
+            packages_count = ws.packages_count if ws.packages_count else 0
             report["totals"]["packaging"]["packages"] += packages_count
             
             # Додаємо до користувача
@@ -505,16 +601,23 @@ async def analyze_all_work_data(all_work_sessions: List, all_other_works: List) 
             else:
                 report["users"][user_id]["packaging"]["partner_time"] += duration_minutes
             
+            # Додаємо час для замовника, якщо це інша людина
+            if ws.requested_by != user_id and ws.requested_by in report["users"]:
+                report["users"][ws.requested_by]["packaging"]["host_time"] += duration_minutes
+            
             # Додаємо кількість пакетів (тільки для головного)
             if is_host:
                 report["users"][user_id]["packaging"]["packages"] += packages_count
+            # Якщо участник не є головним, також додаємо пакети замовнику
+            elif ws.requested_by in report["users"]:
+                report["users"][ws.requested_by]["packaging"]["packages"] += packages_count
         
         elif work_type == "sales":
             # Додаємо до загальних підсумків
             report["totals"]["sales"]["time"] += duration_minutes
             report["totals"]["sales"]["sessions"] += 1
-            packages_count = session.packages_count if session.packages_count else 0
-            sales_amount = session.sales_amount if session.sales_amount else 0
+            packages_count = ws.packages_count if ws.packages_count else 0
+            sales_amount = ws.sales_amount if ws.sales_amount else 0
             report["totals"]["sales"]["packages"] += packages_count
             report["totals"]["sales"]["amount"] += sales_amount
             
@@ -524,10 +627,47 @@ async def analyze_all_work_data(all_work_sessions: List, all_other_works: List) 
             else:
                 report["users"][user_id]["sales"]["partner_time"] += duration_minutes
             
+            # Додаємо час для замовника, якщо це інша людина
+            if ws.requested_by != user_id and ws.requested_by in report["users"]:
+                report["users"][ws.requested_by]["sales"]["host_time"] += duration_minutes
+            
             # Додаємо кількість пакетів та суму (тільки для головного)
             if is_host:
                 report["users"][user_id]["sales"]["packages"] += packages_count
                 report["users"][user_id]["sales"]["amount"] += sales_amount
+            # Якщо участник не є головним, також додаємо пакети й суму замовнику
+            elif ws.requested_by in report["users"]:
+                report["users"][ws.requested_by]["sales"]["packages"] += packages_count
+                report["users"][ws.requested_by]["sales"]["amount"] += sales_amount
+
+    # Окремий цикл для обробки партнерів з таблиці WorkPartner
+    async with async_session() as db_session:
+        for ws in all_work_sessions:
+            if not ws.end_time:
+                continue  # Пропускаємо незавершені сесії
+                
+            # Розраховуємо тривалість у хвилинах
+            duration_minutes = (ws.end_time - ws.start_time).total_seconds() / 60
+            work_type = ws.work_type
+                
+            # Отримуємо всіх партнерів для цієї сесії
+            if ws.id:
+                result = await db_session.execute(
+                    select(WorkPartner.partner_id).where(
+                        WorkPartner.session_id == ws.id
+                    )
+                )
+                partners = result.scalars().all()
+                
+                # Додаємо час для кожного партнера
+                for partner_id in partners:
+                    if partner_id in report["users"]:
+                        if work_type == "production":
+                            report["users"][partner_id]["production"]["partner_time"] += duration_minutes
+                        elif work_type == "packaging":
+                            report["users"][partner_id]["packaging"]["partner_time"] += duration_minutes
+                        elif work_type == "sales":
+                            report["users"][partner_id]["sales"]["partner_time"] += duration_minutes
 
     # Обробляємо інші роботи
     for work in all_other_works:
@@ -543,6 +683,58 @@ async def analyze_all_work_data(all_work_sessions: List, all_other_works: List) 
         # Додаємо до користувача
         if user_id in report["users"]:
             report["users"][user_id]["other_work"]["time"] += work_duration
+        
+        # Якщо є прямий партнер (partner_id)
+        if hasattr(work, 'partner_id') and work.partner_id and work.partner_id in report["users"]:
+            report["users"][work.partner_id]["other_work"]["time"] += work_duration
+            
+        # Додаємо детальну інформацію про іншу роботу
+        work_date = work.work_date.strftime("%d.%m.%Y") if hasattr(work, 'work_date') else "Невідома дата"
+        
+        # Додаємо головного користувача
+        report["other_works_details"].append({
+            "description": work.description,
+            "user_id": user_id,
+            "date": work_date,
+            "duration": work_duration
+        })
+        
+        # Додаємо прямого партнера, якщо він є
+        if hasattr(work, 'partner_id') and work.partner_id:
+            report["other_works_details"].append({
+                "description": work.description,
+                "user_id": work.partner_id,
+                "date": work_date,
+                "duration": work_duration
+            })
+
+    # Окремий цикл для обробки партнерів з таблиці OtherWorkPartner
+    async with async_session() as db_session:
+        for work in all_other_works:
+            work_duration = work.duration if work.duration else 0
+            work_date = work.work_date.strftime("%d.%m.%Y") if hasattr(work, 'work_date') else "Невідома дата"
+            
+            # Отримуємо всіх партнерів для цієї роботи
+            if work.id:
+                result = await db_session.execute(
+                    select(OtherWorkPartner.partner_id).where(
+                        OtherWorkPartner.other_work_id == work.id
+                    )
+                )
+                partners = result.scalars().all()
+                
+                # Додаємо час для кожного партнера і записуємо в деталі
+                for partner_id in partners:
+                    if partner_id in report["users"]:
+                        report["users"][partner_id]["other_work"]["time"] += work_duration
+                        
+                        # Додаємо інформацію про партнера для цієї роботи
+                        report["other_works_details"].append({
+                            "description": work.description,
+                            "user_id": partner_id,
+                            "date": work_date,
+                            "duration": work_duration
+                        })
 
     return report
 
@@ -564,7 +756,7 @@ def format_all_users_report(report_data: Dict, month: int, year: int) -> str:
     month_name = get_month_name(month)
 
     # Функція для форматування часу
-    def format_time(minutes: float) -> str:
+    def formating_time(minutes: float) -> str:
         hours = int(minutes // 60)
         mins = int(minutes % 60)
         if hours > 0:
@@ -576,20 +768,20 @@ def format_all_users_report(report_data: Dict, month: int, year: int) -> str:
 
     # Додаємо загальні підсумки
     report += f"📋 <b>Загальні підсумки:</b>\n"
-    report += f"🏭 <b>Виробництво:</b> {format_time(totals['production']['time'])}\n"
+    report += f"🏭 <b>Виробництво:</b> {formating_time(totals['production']['time'])}\n"
 
-    report += f"📦 <b>Пакування:</b> {format_time(totals['packaging']['time'])}\n"
+    report += f"📦 <b>Пакування:</b> {formating_time(totals['packaging']['time'])}\n"
     if totals["packaging"]["packages"] > 0:
         report += f"   - Всього пакетів: {totals['packaging']['packages']}\n"
 
-    report += f"💰 <b>Продаж:</b> {format_time(totals['sales']['time'])}\n"
+    report += f"💰 <b>Продаж:</b> {formating_time(totals['sales']['time'])}\n"
     if totals["sales"]["packages"] > 0:
         report += f"   - Всього пакетів продано: {totals['sales']['packages']}\n"
     if totals["sales"]["amount"] > 0:
         report += f"   - Всього продано: {totals['sales']['amount']} грн.\n"
 
-    report += f"📝 <b>Інша робота:</b> {format_time(totals['other_work']['time'])}\n"
-    report += f"⏱ <b>Загальний час:</b> {format_time(totals['total_time'])}\n\n"
+    report += f"📝 <b>Інша робота:</b> {formating_time(totals['other_work']['time'])}\n"
+    report += f"⏱ <b>Загальний час:</b> {formating_time(totals['total_time'])}\n\n"
 
     # Сортуємо користувачів за іменами
     sorted_users = sorted(users_data.items(), key=lambda x: x[1]['username'])
@@ -603,24 +795,24 @@ def format_all_users_report(report_data: Dict, month: int, year: int) -> str:
         production = user_data["production"]
         prod_total = production['host_time'] + production['partner_time']
         if prod_total > 0:
-            report += f"🏭 <b>Виробництво:</b> {format_time(prod_total)}\n"
+            report += f"🏭 <b>Виробництво:</b> {formating_time(prod_total)}\n"
 
         # Пакування
         packaging = user_data["packaging"]
         pack_total = packaging['host_time'] + packaging['partner_time']
         if pack_total > 0:
-            report += f"📦 <b>Пакування:</b> {format_time(pack_total)}\n"
+            report += f"📦 <b>Пакування:</b> {formating_time(pack_total)}\n"
 
         # Продаж
         sales = user_data["sales"]
         sales_total = sales['host_time'] + sales['partner_time']
         if sales_total > 0:
-            report += f"💰 <b>Продаж:</b> {format_time(sales_total)}\n"
+            report += f"💰 <b>Продаж:</b> {formating_time(sales_total)}\n"
 
         # Інша робота
         other_work = user_data["other_work"]
-        if other_work["time"] > 0:
-            report += f"📝 <b>Інша робота:</b> {format_time(other_work['time'])}\n"
+        if other_work["time"] >= 0:
+            report += f"📝 <b>Інша робота:</b> {formating_time(other_work['time'])}\n"
             if other_work["works"]:
                 report += "   - Виконані завдання:\n"
                 for work in other_work["works"]:
@@ -631,6 +823,6 @@ def format_all_users_report(report_data: Dict, month: int, year: int) -> str:
                     else:
                         report += f"     • {work['date']} - {work['description']}\n"
 
-        report += f"⏱ <b>Загальний час:</b> {format_time(user_data['total_time'])}\n\n"
+        report += f"⏱ <b>Загальний час:</b> {formating_time(user_data['total_time'])}\n\n"
 
     return report

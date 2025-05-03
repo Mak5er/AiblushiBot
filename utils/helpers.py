@@ -148,28 +148,27 @@ def get_partners_text(
     return ", ".join(partner_mentions)
 
 
-def format_time(duration: Union[datetime.timedelta, int, float]) -> str:
-    """
-    Форматує час у вигляді "Xг Yхв"
+def format_time(minutes: float) -> str:
+    """Форматує час у хвилинах у зручний для читання формат (години та хвилини)
     
     Args:
-        duration: Тривалість (може бути timedelta або кількість хвилин)
+        minutes: Час у хвилинах
         
     Returns:
-        Відформатований час
+        str: Відформатований час (наприклад, "2 год. 30 хв.")
     """
-    if isinstance(duration, datetime.timedelta):
-        minutes = duration.total_seconds() / 60
-    else:
-        minutes = float(duration)
-    
+    if minutes is None or minutes == 0:
+        return "0 хв."
+        
     hours = int(minutes // 60)
     mins = int(minutes % 60)
     
-    if hours > 0:
-        return f"{hours}г {mins}хв"
+    if hours > 0 and mins > 0:
+        return f"{hours} год. {mins} хв."
+    elif hours > 0:
+        return f"{hours} год."
     else:
-        return f"{mins}хв"
+        return f"{mins} хв."
 
 
 def calculate_duration(start_time: datetime.datetime) -> str:
@@ -184,7 +183,7 @@ def calculate_duration(start_time: datetime.datetime) -> str:
     """
     now = datetime.datetime.now()
     duration = now - start_time
-    return format_time(duration)
+    return format_time(duration.total_seconds() / 60)
 
 
 def check_private_chat(message: types.Message) -> bool:
